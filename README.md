@@ -1,3 +1,14 @@
+---
+title: MCP DB Assistant
+emoji: 🗄️
+colorFrom: blue
+colorTo: indigo
+sdk: streamlit
+sdk_version: 1.35.0
+app_file: app.py
+pinned: false
+---
+
 # MCP-Powered Database Assistant
 
 A conversational AI assistant that lets you explore a SQLite database using plain English. Ask a question, get back the generated SQL, a results table, a plain-English explanation, and an optional chart — all powered by a **Model Context Protocol (MCP)** server that keeps the database completely decoupled from the agent logic.
