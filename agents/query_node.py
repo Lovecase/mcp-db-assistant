@@ -1,0 +1,86 @@
+import os
+
+import httpx
+from dotenv import load_dotenv
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_groq import ChatGroq
+
+from agents.state import AgentState
+
+load_dotenv()
+
+_MCP_URL = os.getenv("MCP_SERVER_URL", "http://localhost:8000/mcp/")
+
+_llm = ChatGroq(model="llama-3.3-70b-versatile")
+
+_PROMPT = ChatPromptTemplate.from_template(
+    "You are an expert SQL assistant. Given the database schema below and a user question, "
+    "write a single valid SQLite SELECT query.\n\n"
+    "DATABASE SCHEMA:\n{schema_context}\n\n"
+    "USER QUESTION:\n{user_question}\n\n"
+    "{error_context}"
+    "Rules:\n"
+    "- Only write SELECT queries. No INSERT, UPDATE, DELETE, DROP.\n"
+    "- Use proper SQLite syntax (e.g. strftime for dates).\n"
+    "- Return ONLY the raw SQL query, no explanation, no markdown, no backticks."
+)
+
+
+def _clean_sql(text: str) -> str:
+    text = text.strip()
+    if text.startswith("```"):
+        lines = text.splitlines()
+        inner = lines[1:-1] if lines[-1].strip() == "```" else lines[1:]
+        text = "\n".join(inner)
+    return text.strip()
+
+
+def _call_tool(name: str, arguments: dict) -> dict:
+    response = httpx.post(
+        _MCP_URL,
+        json={
+            "jsonrpc": "2.0",
+            "method": "tools/call",
+            "params": {"name": name, "arguments": arguments},
+            "id": 1,
+        },
+    )
+    response.raise_for_status()
+    return response.json()["result"]
+
+
+def query_node(state: AgentState) -> dict:
+    retry_count = state.get("retry_count", 0) + 1
+
+    error_context = ""
+    if state.get("sql_error"):
+        error_context = (
+            f"PREVIOUS ATTEMPT FAILED:\n"
+            f"SQL: {state['generated_sql']}\n"
+            f"Error: {state['sql_error']}\n"
+            f"Please fix the query.\n\n"
+        )
+
+    chain = _PROMPT | _llm
+    response = chain.invoke({
+        "schema_context": state["schema_context"],
+        "user_question":  state["user_question"],
+        "error_context":  error_context,
+    })
+
+    sql = _clean_sql(response.content)
+    result = _call_tool("execute_query", {"sql": sql})
+
+    if "error" in result:
+        return {
+            "generated_sql": sql,
+            "sql_error":     result["error"],
+            "retry_count":   retry_count,
+        }
+
+    return {
+        "generated_sql": sql,
+        "query_result":  result["rows"],
+        "sql_error":     None,
+        "retry_count":   retry_count,
+    }
