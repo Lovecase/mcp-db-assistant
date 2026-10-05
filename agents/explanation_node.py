@@ -8,7 +8,7 @@ from agents.state import AgentState
 
 load_dotenv()
 
-_llm = ChatGroq(model="llama-3.3-70b-versatile")
+_llm = ChatGroq(model="openai/gpt-oss-20b")
 
 _PROMPT = ChatPromptTemplate.from_template(
     'You are a data analyst assistant. A user asked: "{user_question}"\n\n'
@@ -42,33 +42,35 @@ def explanation_node(state: AgentState) -> dict:
     query_result = state.get("query_result", [])
 
     chain = _PROMPT | _llm
-    response = chain.invoke({
-        "user_question": state["user_question"],
-        "row_count":     len(query_result),
-        "sample_rows":   json.dumps(query_result[:10], indent=2),
-    })
+    response = chain.invoke(
+        {
+            "user_question": state["user_question"],
+            "row_count": len(query_result),
+            "sample_rows": json.dumps(query_result[:10], indent=2),
+        }
+    )
 
     try:
-        parsed      = _parse_json(response.content)
+        parsed = _parse_json(response.content)
         explanation = parsed.get("explanation", response.content)
         should_chart = bool(parsed.get("should_chart", False))
         chart_config = (
             {
-                "chart_type":  parsed.get("chart_type"),
-                "x_column":    parsed.get("x_column"),
-                "y_column":    parsed.get("y_column"),
+                "chart_type": parsed.get("chart_type"),
+                "x_column": parsed.get("x_column"),
+                "y_column": parsed.get("y_column"),
                 "chart_title": parsed.get("chart_title"),
             }
             if should_chart
             else None
         )
     except (json.JSONDecodeError, ValueError):
-        explanation  = response.content
+        explanation = response.content
         should_chart = False
         chart_config = None
 
     return {
-        "explanation":  explanation,
+        "explanation": explanation,
         "should_chart": should_chart,
         "chart_config": chart_config,
     }

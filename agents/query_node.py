@@ -11,7 +11,7 @@ load_dotenv()
 
 _MCP_URL = os.getenv("MCP_SERVER_URL", "http://localhost:8000/mcp/")
 
-_llm = ChatGroq(model="llama-3.3-70b-versatile")
+_llm = ChatGroq(model="openai/gpt-oss-20b")
 
 _PROMPT = ChatPromptTemplate.from_template(
     "You are an expert SQL assistant. Given the database schema below and a user question, "
@@ -62,11 +62,13 @@ def query_node(state: AgentState) -> dict:
         )
 
     chain = _PROMPT | _llm
-    response = chain.invoke({
-        "schema_context": state["schema_context"],
-        "user_question":  state["user_question"],
-        "error_context":  error_context,
-    })
+    response = chain.invoke(
+        {
+            "schema_context": state["schema_context"],
+            "user_question": state["user_question"],
+            "error_context": error_context,
+        }
+    )
 
     sql = _clean_sql(response.content)
     result = _call_tool("execute_query", {"sql": sql})
@@ -74,13 +76,13 @@ def query_node(state: AgentState) -> dict:
     if "error" in result:
         return {
             "generated_sql": sql,
-            "sql_error":     result["error"],
-            "retry_count":   retry_count,
+            "sql_error": result["error"],
+            "retry_count": retry_count,
         }
 
     return {
         "generated_sql": sql,
-        "query_result":  result["rows"],
-        "sql_error":     None,
-        "retry_count":   retry_count,
+        "query_result": result["rows"],
+        "sql_error": None,
+        "retry_count": retry_count,
     }

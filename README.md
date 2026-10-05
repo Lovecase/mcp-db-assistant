@@ -140,7 +140,9 @@ The app opens at `http://localhost:8501`.
 
 ## Sample questions
 
-- What is the total revenue by region?
+- **How many new customers signed up each month this year? **
+
+
 - Which product category generates the most orders?
 - Show me monthly revenue trends for the last 12 months
 - Who are the top 10 customers by total spend?
