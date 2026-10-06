@@ -1,3 +1,4 @@
+import json
 import os
 
 import httpx
@@ -5,6 +6,11 @@ from dotenv import load_dotenv
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_groq import ChatGroq
 
+from agents.query_cache import (
+    database_revision,
+    make_sql_cache_key,
+    sql_result_cache,
+)
 from agents.state import AgentState
 
 load_dotenv()
@@ -18,10 +24,13 @@ _PROMPT = ChatPromptTemplate.from_template(
     "write a single valid SQLite SELECT query.\n\n"
     "DATABASE SCHEMA:\n{schema_context}\n\n"
     "USER QUESTION:\n{user_question}\n\n"
+    "RECENT CONVERSATION CONTEXT (same conversation only):\n{conversation_context}\n\n"
     "{error_context}"
     "Rules:\n"
     "- Only write SELECT queries. No INSERT, UPDATE, DELETE, DROP.\n"
     "- Use proper SQLite syntax (e.g. strftime for dates).\n"
+    "- Use conversation context only to resolve references in the current question.\n"
+    "- Always generate a complete query for the current question; do not assume prior results contain all needed rows.\n"
     "- Return ONLY the raw SQL query, no explanation, no markdown, no backticks."
 )
 
@@ -66,11 +75,30 @@ def query_node(state: AgentState) -> dict:
         {
             "schema_context": state["schema_context"],
             "user_question": state["user_question"],
+            "conversation_context": json.dumps(
+                state.get("conversation_context", [])[-3:], indent=2, default=str
+            ),
             "error_context": error_context,
         }
     )
 
     sql = _clean_sql(response.content)
+    cache_key = make_sql_cache_key(
+        sql,
+        state["schema_context"],
+        database_revision(),
+    )
+    cached_result = sql_result_cache.get(cache_key)
+    if cached_result is not None:
+        return {
+            "generated_sql": sql,
+            "query_result": cached_result["rows"],
+            "query_columns": cached_result["columns"],
+            "sql_error": None,
+            "retry_count": retry_count,
+            "sql_cache_hit": True,
+        }
+
     result = _call_tool("execute_query", {"sql": sql})
 
     if "error" in result:
@@ -78,11 +106,18 @@ def query_node(state: AgentState) -> dict:
             "generated_sql": sql,
             "sql_error": result["error"],
             "retry_count": retry_count,
+            "sql_cache_hit": False,
         }
+
+    rows = result["rows"]
+    columns = result.get("columns", list(rows[0].keys()) if rows else [])
+    sql_result_cache.set(cache_key, {"rows": rows, "columns": columns})
 
     return {
         "generated_sql": sql,
-        "query_result": result["rows"],
+        "query_result": rows,
+        "query_columns": columns,
         "sql_error": None,
         "retry_count": retry_count,
+        "sql_cache_hit": False,
     }

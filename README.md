@@ -19,7 +19,7 @@ A conversational AI assistant that lets you explore a SQLite database using plai
 
 1. You type a question: *"What is the total revenue by region?"*
 2. The LangGraph agent discovers the database schema via MCP
-3. An LLM (Llama 3.3 70B via Groq) generates the SQL
+3. An LLM (`gpt-oss-20b` hosted by Groq) generates the SQL
 4. MCP executes the query safely against SQLite
 5. A second LLM call produces a plain-English insight and decides if a chart helps
 6. Results, SQL, explanation, and chart appear in the Streamlit UI
@@ -31,12 +31,12 @@ A conversational AI assistant that lets you explore a SQLite database using plai
 | Layer | Technology |
 |---|---|
 | Agent orchestration | LangGraph |
-| LLM | Llama 3.3 70B via Groq API (free tier) |
+| LLM | `gpt-oss-20b` via Groq-hosted inference |
 | MCP server | FastAPI + MCP Python SDK |
 | Database | SQLite |
 | Frontend | Streamlit |
 | Charts | Plotly Express |
-| Tests | pytest (30 tests — unit + integration) |
+| Tests | pytest (unit + integration) |
 
 ---
 
@@ -76,6 +76,7 @@ mcp-db-assistant/
 │   └── main.py            # FastAPI app, JSON-RPC handler at /mcp
 ├── agents/
 │   ├── state.py           # AgentState TypedDict
+│   ├── query_cache.py     # Bounded response and SQL-result TTL/LRU caches
 │   ├── schema_node.py     # Fetches and caches DB schema via MCP
 │   ├── query_node.py      # NL → SQL via LLM, executes via MCP, retries on error
 │   ├── explanation_node.py # Results → insight + chart config via LLM
@@ -88,7 +89,8 @@ mcp-db-assistant/
 │   └── sample.db          # Generated — not committed
 ├── tests/
 │   ├── test_mcp_tools.py  # Integration tests for all 4 MCP tools
-│   └── test_query_node.py # Unit tests for SQL generation + retry logic
+│   ├── test_query_node.py # Unit tests for SQL generation + retry logic
+│   └── test_query_cache.py # Cache, expiry, isolation, and follow-up tests
 └── requirements.txt
 ```
 
@@ -111,7 +113,7 @@ GROQ_API_KEY=your-groq-api-key
 MCP_SERVER_URL=http://localhost:8000/mcp/
 ```
 
-Get a free Groq API key at [console.groq.com](https://console.groq.com) — no credit card required.
+Create a Groq API key at [console.groq.com](https://console.groq.com). API access, quotas, and any charges depend on Groq's current terms; check them before deployment.
 
 **3. Seed the database**
 ```bash
@@ -158,10 +160,6 @@ The app opens at `http://localhost:8501`.
 python -m pytest tests/ -v
 ```
 
-```
-30 passed in 0.44s
-```
-
 Tests run fully offline — no LLM calls, no running server required. The integration tests spin up a temporary in-memory SQLite database seeded from `seed.sql`.
 
 ---
@@ -172,3 +170,12 @@ Tests run fully offline — no LLM calls, no running server required. The integr
 - **LangGraph retry loop** — `query_node` retries up to 3 times on SQL errors, passing the previous error back to the LLM to guide the fix.
 - **Schema caching** — the schema is fetched once per browser session and reused, cutting MCP calls significantly.
 - **SELECT-only guard** — `database.py` rejects any non-SELECT statement before it reaches SQLite.
+
+## Query caching and follow-ups
+
+- Exact standalone repeats can reuse a completed response, avoiding both LLM calls and database execution. Follow-up responses are scoped to the current Streamlit session and never share conversation context between sessions.
+- Follow-up context includes at most the last 3 successful turns and up to 5 sample rows per turn. New follow-up questions still generate a complete SQL query.
+- The SQL-result cache runs after SQL generation. A hit avoids MCP execution, but SQL generation and the explanation call still happen.
+- Both caches are in-memory, thread-safe TTL/LRU caches. Defaults are 300 seconds, 128 entries per cache, and 128 KiB per entry. Configure them with `QUERY_CACHE_TTL_SECONDS`, `QUERY_CACHE_MAX_ENTRIES`, and `QUERY_CACHE_MAX_ENTRY_BYTES`.
+- Cache keys include schema and local database revision. Relative-date requests use a UTC day bucket. The database revision uses file path, modification time, and size; replace/reseed the database to invalidate its cached results.
+- Cache contents disappear when the process restarts or the Space rebuilds. This is intentional; a miss falls back to the normal query flow. Caching cannot create missing source data.

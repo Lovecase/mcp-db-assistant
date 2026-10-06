@@ -1,5 +1,6 @@
 # Project internals — not for public repo
 MCP_DB_Assistant_Prompt.md
+QUERY_CACHE_IMPLEMENTATION_PROMPT.md
 
 # Environment — never commit API keys
 .env
